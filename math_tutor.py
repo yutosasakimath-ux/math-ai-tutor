@@ -5,7 +5,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="数学AIチューター", page_icon="📐")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("わからない問題を質問してみよう。ヒントを出して一緒に考えてくれるよ！")
+st.caption("Gemini 1.5 Pro 搭載。ヒントを出して一緒に考えてくれるよ！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -15,7 +15,7 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("先生用管理画面")
     
-    # 【修正点1】生徒がキー入力しなくて済むように、サーバーの鍵を優先して読む
+    # APIキー設定（Secrets対応）
     api_key = ""
     try:
         if "GEMINI_API_KEY" in st.secrets:
@@ -24,13 +24,11 @@ with st.sidebar:
     except:
         pass
 
-    # サーバーに鍵がない場合（ローカルなど）のみ、手動入力を表示
     if not api_key:
         api_key = st.text_input("Gemini APIキーを入力", type="password")
     
     st.markdown("---")
     
-    # システムプロンプト
     system_instruction = """
     あなたは日本の高校の親切で優秀な数学教師です。
     生徒からの数学の質問に答えてください。
@@ -43,52 +41,29 @@ with st.sidebar:
     5. 解説は高校生にもわかりやすい平易な言葉を使ってください。
     """
 
-# --- 4. モデルのセットアップ ---
+# --- 4. モデルのセットアップ（ここを修正！） ---
 if api_key:
     genai.configure(api_key=api_key)
     
-    # エラー回避のためのモデル自動選択ロジック
     try:
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
+        # 【修正点】モデルを自動探索せず、名指しで指定します。
+        # これにより、勝手に実験版(2.5)が選ばれるエラーを防ぎます。
+        # "gemini-1.5-pro" は現在無料で使える中で最も賢いモデルです。
+        target_model_name = "gemini-1.5-pro"
         
-        if available_models:
-            # 【修正点2】優先順位を「Pro（賢い）」→「Flash（速い）」の順に変更しました
-            # これにより、Proが使える環境ならProを、だめならFlashを自動で使います
-            priority_keywords = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"]
-            
-            selected_model_name = available_models[0] # 仮の初期値
-            
-            # 優先順位リストの上から順に、使えるモデルを探す
-            found = False
-            for keyword in priority_keywords:
-                for m_name in available_models:
-                    if keyword in m_name and "exp" not in m_name: # 実験版(exp)は除外
-                        selected_model_name = m_name
-                        found = True
-                        break
-                if found:
-                    break
-            
-            # デバッグ用：どのモデルが選ばれたかサイドバーに小さく表示（確認用）
-            st.sidebar.caption(f"使用モデル: {selected_model_name}")
-
-            # モデルのインスタンス化
-            model = genai.GenerativeModel(
-                model_name=selected_model_name,
-                system_instruction=system_instruction
-            )
-        else:
-            st.error("利用可能なモデルが見つかりませんでした。")
-            st.stop()
+        model = genai.GenerativeModel(
+            model_name=target_model_name,
+            system_instruction=system_instruction
+        )
+        
+        # デバッグ用表示（必要なければ消してもOK）
+        # st.sidebar.caption(f"使用モデル: {target_model_name}")
 
     except Exception as e:
         st.error(f"モデル設定エラー: {e}")
         st.stop()
 
-# --- 5. 過去の会話履歴を表示する ---
+# --- 5. 過去の会話履歴を表示 ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -110,14 +85,14 @@ if prompt := st.chat_input("質問を入力（例：ベクトルの内積って�
         full_response = ""
         
         try:
-            # 過去の会話履歴をAIに渡す形に変換
+            # 履歴の変換処理
             chat_history_for_ai = [
                 {"role": m["role"], "parts": [m["content"]]} 
                 for m in st.session_state.messages 
                 if m["role"] != "system"
             ]
             
-            # チャットセッションを開始
+            # チャット開始
             chat = model.start_chat(history=chat_history_for_ai)
             response = chat.send_message(prompt, stream=True)
             
@@ -129,4 +104,9 @@ if prompt := st.chat_input("質問を入力（例：ベクトルの内積って�
             st.session_state.messages.append({"role": "model", "content": full_response})
 
         except Exception as e:
-            st.error(f"エラーが発生しました: {e}")
+            # エラー処理
+            err_msg = str(e)
+            if "429" in err_msg:
+                st.error("⚠️ 使いすぎです（429エラー）。少し時間を置いてから試してください。")
+            else:
+                st.error(f"エラーが発生しました: {e}")
