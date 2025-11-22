@@ -16,7 +16,7 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("🛠️ 先生用・ツール")
     
-    # APIキー設定
+    # APIキー設定（エラー回避ロジック）
     api_key = ""
     try:
         if "GEMINI_API_KEY" in st.secrets:
@@ -70,17 +70,41 @@ with st.sidebar:
             """
         )
 
-# --- 4. モデル設定（修正済み） ---
+# --- 4. モデル設定（安全策：実験モデルを除外して自動選択） ---
 model = None
 if api_key:
     genai.configure(api_key=api_key)
     try:
-        # 【修正】実験的なモデルを避け、安定版の「1.5 Flash」を指名する
-        # Flashは高速で、無料枠の制限も緩いため教育アプリに最適です
+        # 利用可能なモデルを全取得
+        all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # 【ここが重要】無料枠のない実験モデル(exp)や最新すぎるモデル(2.5)を除外する
+        stable_models = [m for m in all_models if "exp" not in m and "2.5" not in m]
+        
+        target_model = "gemini-1.5-flash" # 第一希望
+        
+        if stable_models:
+            # 1. "flash" がつく安定モデルを探す
+            flash_model = next((m for m in stable_models if "flash" in m), None)
+            # 2. なければ "pro" がつく安定モデルを探す
+            pro_model = next((m for m in stable_models if "pro" in m), None)
+            
+            # 優先順位：Flash > Pro > リストの最初
+            if flash_model:
+                target_model = flash_model
+            elif pro_model:
+                target_model = pro_model
+            else:
+                target_model = stable_models[0]
+        
+        # モデル決定
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash", 
+            model_name=target_model, 
             system_instruction=system_instruction
         )
+        # デバッグ用に少しだけ情報を出す（必要なければ消してOK）
+        # st.sidebar.caption(f"使用モデル: {target_model}")
+        
     except Exception as e:
         st.error(f"モデル設定エラー: {e}")
 
@@ -109,7 +133,6 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             last_msg = st.session_state.messages[-1]["content"]
             content_to_send = [last_msg["text"], last_msg["image"]] if isinstance(last_msg, dict) else last_msg
 
-            # エラーハンドリングを追加
             try:
                 response = model.generate_content(content_to_send, stream=True)
                 for chunk in response:
@@ -121,9 +144,8 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 st.rerun()
             
             except Exception as api_error:
-                # APIエラー（429など）が出た場合に画面に優しく表示する
-                st.error(f"通信エラーが発生しました: {api_error}")
-                st.info("時間を置いてもう一度試すか、会話をリセットしてみてください。")
+                st.error(f"通信エラー: {api_error}")
+                st.info("時間を置くか、リセットボタンを押してみてください。")
 
         except Exception as e:
             st.error(f"予期せぬエラー: {e}")
