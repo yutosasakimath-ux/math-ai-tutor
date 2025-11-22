@@ -31,15 +31,28 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # ★追加機能：会話リセットボタン★
-    # type="primary" にすると赤いボタン（目立つボタン）になります
+    # ★機能1：会話リセットボタン（赤色）★
     if st.button("🗑️ 会話をリセットする", type="primary"):
-        st.session_state.messages = []  # 履歴を空にする
-        st.rerun()  # 画面を再読み込みしてリセットを反映
+        st.session_state.messages = []
+        st.rerun()
+
+    # ★機能2：類題出題ボタン（通常色）★
+    # 押すと、裏側で「類題を作って」という指示をAIに送ります
+    if st.button("🔄 さっきの類題を出題"):
+        # AIへの指示内容
+        prompt_text = """
+        【教師へのリクエスト】
+        直前のやり取りで扱った問題と「同じ単元」「同じ難易度」の類題を1問作成してください。
+        数値を変えるだけでなく、本質的な理解を試す問題にしてください。
+        まだ解説はせず、問題のみを提示してください。
+        """
+        # ユーザーの発言として履歴に追加
+        st.session_state.messages.append({"role": "user", "content": prompt_text})
+        st.rerun()  # 画面を更新してAIに答えさせる
     
     st.markdown("---")
     
-    # システムプロンプト
+    # システムプロンプト（指導方針）
     system_instruction = """
     あなたは日本の高校の親切で優秀な数学教師です。
     生徒からの数学の質問に答えてください。
@@ -50,6 +63,7 @@ with st.sidebar:
     3. 生徒が間違えている場合は、否定せず「惜しい！」「ここを確認してみて」と励ましてください。
     4. 数式はLaTeX形式（$マークで囲む）を使って綺麗に表示してください。
     5. 解説は高校生にもわかりやすい平易な言葉を使ってください。
+    6. 「類題」を求められたら、直前の問題の構造を分析し、適切な練習問題を作成してください。
     """
 
 # --- 4. モデルのセットアップ ---
@@ -79,18 +93,14 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- 6. 新しい質問の処理 ---
-if prompt := st.chat_input("質問を入力（例：ベクトルの内積って何？）"):
+# --- 6. AI応答ロジック（ボタンからも入力欄からも共通で動く） ---
+# 履歴の最後が「user」なら、AIが答える番です
+if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+    
     if not api_key:
         st.warning("左のサイドバーにAPIキーを入れてください")
         st.stop()
 
-    # ユーザーの質問を表示
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
-
-    # AIの回答を生成
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
         full_response = ""
@@ -105,14 +115,21 @@ if prompt := st.chat_input("質問を入力（例：ベクトルの内積って�
             
             # チャット開始
             chat = model.start_chat(history=chat_history_for_ai)
-            response = chat.send_message(prompt, stream=True)
+            
+            # 最新のメッセージ（ユーザー入力またはボタンの指示）を取得して送信
+            last_msg = st.session_state.messages[-1]["content"]
+            response = chat.send_message(last_msg, stream=True)
             
             for chunk in response:
                 if chunk.text:
                     full_response += chunk.text
                     response_placeholder.markdown(full_response)
             
+            # AIの回答を保存
             st.session_state.messages.append({"role": "model", "content": full_response})
+            
+            # 完了後にリロード（連打防止）
+            st.rerun()
 
         except Exception as e:
             err_msg = str(e)
@@ -122,3 +139,13 @@ if prompt := st.chat_input("質問を入力（例：ベクトルの内積って�
                  st.error(f"⚠️ モデルが見つかりません: {target_model_name}")
             else:
                 st.error(f"エラーが発生しました: {e}")
+
+# --- 7. 入力エリア ---
+# ※AIが回答中の時は入力欄を出さない（エラー防止）
+if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
+    if prompt := st.chat_input("質問を入力（例：ベクトルの内積って何？）"):
+        # ユーザーの質問を表示
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.rerun()
