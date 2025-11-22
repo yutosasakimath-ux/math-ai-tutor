@@ -1,187 +1,132 @@
 import streamlit as st
 import google.generativeai as genai
-from PIL import Image
-import time
 
-# --- 1. アプリの基本設定 ---
-st.set_page_config(page_title="数学AIチューター Pro", page_icon="🎓", layout="wide")
+# --- 1. アプリの初期設定 ---
+st.set_page_config(page_title="数学AIチューター", page_icon="📐")
 
-st.title("🎓 高校数学 AIチューター Pro")
-st.caption("Gemini 1.5 Pro搭載。文脈を理解し、あなたの専属家庭教師として指導します。")
+st.title("📐 高校数学 AIチューター")
+st.caption("わからない問題を質問してみよう。ヒントを出して一緒に考えてくれるよ！")
 
-# --- 2. 記憶（セッション）の初期化 ---
+# --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- 3. サイドバー（設定とツール） ---
+# --- 3. サイドバー設定 ---
 with st.sidebar:
-    st.header("🛠️ 先生用メニュー")
+    st.header("先生用管理画面")
     
-    # APIキー設定（サーバーの鍵があれば自動読み込み、なければ手動入力）
+    # 【修正点1】生徒がキー入力しなくて済むように、サーバーの鍵を優先して読む
     api_key = ""
     try:
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("✅ 認証済み")
+            st.success("✅ 認証済み（サーバーキー使用中）")
     except:
         pass
 
+    # サーバーに鍵がない場合（ローカルなど）のみ、手動入力を表示
     if not api_key:
-        api_key = st.text_input("Gemini APIキー", type="password")
-
-    st.markdown("---")
-
-    # 3-1. 会話リセットボタン
-    if st.button("🗑️ 会話をリセット", type="primary"):
-        st.session_state.messages = []
-        st.rerun()
-
-    # 3-2. 類題生成ボタン
-    if st.button("🔄 さっきの類題を出題"):
-        # AIに送る「類題作成」の特別リクエスト
-        prompt_text = """
-        【教師へのリクエスト】
-        直前のやり取りで扱った問題と「同じ単元」「同じ難易度」の類題を1問作成してください。
-        単に数字を変えるだけでなく、本質的な理解を試す問題にしてください。
-        まだ解説はせず、問題のみを提示してください。
-        """
-        # ユーザーの発言として履歴に追加し、AIの回答を誘発する
-        st.session_state.messages.append({"role": "user", "content": prompt_text})
-        st.rerun()
-
+        api_key = st.text_input("Gemini APIキーを入力", type="password")
+    
     st.markdown("---")
     
-    # 3-3. 指導プロンプト（AIの性格設定）
-    with st.expander("指導方針（システムプロンプト）"):
-        system_instruction = st.text_area(
-            "指示内容",
-            value="""
-            あなたは日本の高校数学のプロフェッショナルな教師です。
-            
-            【行動ルール】
-            1. **文脈重視**: 過去の会話の流れを常に意識して回答すること。
-            2. **スキャフォルディング**: いきなり正解を教えず、ヒントを出して生徒に考えさせること。
-            3. **数式表示**: 数式は必ずLaTeX形式（$マークで囲む）で記述すること。
-            4. **類題作成**: 「類題」を求められたら、直前の問題の構造を分析し、適切な練習問題を作成すること。
-            5. **トーン**: 生徒を励まし、数学の面白さを伝えるような温かい口調で話すこと。
-            """
-        )
-        
-    # 3-4. ログ保存
-    log_text = ""
-    for m in st.session_state.messages:
-        role = "生徒" if m["role"] == "user" else "AI先生"
-        content = m["content"] if isinstance(m["content"], str) else "[画像または複合データ]"
-        log_text += f"【{role}】\n{content}\n\n"
-    st.download_button("対話ログを保存 (.txt)", log_text, "math_log.txt")
+    # システムプロンプト
+    system_instruction = """
+    あなたは日本の高校の親切で優秀な数学教師です。
+    生徒からの数学の質問に答えてください。
+    
+    【指導のルール】
+    1. **すぐに最終的な正解を教えないこと**。
+    2. 生徒が自力で解けるように、段階的なヒントや、考え方の道筋を示してください。
+    3. 生徒が間違えている場合は、否定せず「惜しい！」「ここを確認してみて」と励ましてください。
+    4. 数式はLaTeX形式（$マークで囲む）を使って綺麗に表示してください。
+    5. 解説は高校生にもわかりやすい平易な言葉を使ってください。
+    """
 
-# --- 4. AIモデルの設定（最高性能版） ---
-model = None
+# --- 4. モデルのセットアップ ---
 if api_key:
     genai.configure(api_key=api_key)
+    
+    # エラー回避のためのモデル自動選択ロジック
     try:
-        # ★重要：Gemini 1.5 Pro (最新安定版) を指定
-        # 思考力・文脈理解力が最も高く、数学指導に最適です。
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-pro", 
-            system_instruction=system_instruction
-        )
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        if available_models:
+            # 【修正点2】優先順位を「Pro（賢い）」→「Flash（速い）」の順に変更しました
+            # これにより、Proが使える環境ならProを、だめならFlashを自動で使います
+            priority_keywords = ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"]
+            
+            selected_model_name = available_models[0] # 仮の初期値
+            
+            # 優先順位リストの上から順に、使えるモデルを探す
+            found = False
+            for keyword in priority_keywords:
+                for m_name in available_models:
+                    if keyword in m_name and "exp" not in m_name: # 実験版(exp)は除外
+                        selected_model_name = m_name
+                        found = True
+                        break
+                if found:
+                    break
+            
+            # デバッグ用：どのモデルが選ばれたかサイドバーに小さく表示（確認用）
+            st.sidebar.caption(f"使用モデル: {selected_model_name}")
+
+            # モデルのインスタンス化
+            model = genai.GenerativeModel(
+                model_name=selected_model_name,
+                system_instruction=system_instruction
+            )
+        else:
+            st.error("利用可能なモデルが見つかりませんでした。")
+            st.stop()
+
     except Exception as e:
         st.error(f"モデル設定エラー: {e}")
-
-# --- 5. チャット履歴の表示 ---
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        content = message["content"]
-        
-        # テキストの場合
-        if isinstance(content, str):
-            st.markdown(content)
-        # 画像+テキスト（辞書型）の場合
-        elif isinstance(content, dict):
-            if "image" in content:
-                st.image(content["image"], width=300)
-            if "text" in content:
-                st.markdown(content["text"])
-
-# --- 6. AI応答ロジック（文脈を保持して回答する） ---
-# 履歴の最後が「user」なら、AIが答える番です
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-    
-    if not api_key:
-        st.warning("サイドバーでAPIキーを設定してください。")
         st.stop()
 
+# --- 5. 過去の会話履歴を表示する ---
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# --- 6. 新しい質問の処理 ---
+if prompt := st.chat_input("質問を入力（例：ベクトルの内積って何？）"):
+    if not api_key:
+        st.warning("左のサイドバーにAPIキーを入れてください")
+        st.stop()
+
+    # ユーザーの質問を表示
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    # AIの回答を生成
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
         full_response = ""
         
         try:
-            # --- 文脈データの構築 ---
-            # 過去のやり取りをGeminiが理解できる形式に変換します
-            history_for_ai = []
+            # 過去の会話履歴をAIに渡す形に変換
+            chat_history_for_ai = [
+                {"role": m["role"], "parts": [m["content"]]} 
+                for m in st.session_state.messages 
+                if m["role"] != "system"
+            ]
             
-            # 今回の最新メッセージ以外（過去ログ）を履歴として積み上げる
-            for msg in st.session_state.messages[:-1]:
-                role = "user" if msg["role"] == "user" else "model"
-                content = msg["content"]
-                
-                parts = []
-                if isinstance(content, str):
-                    parts.append(content)
-                elif isinstance(content, dict):
-                    if "text" in content: parts.append(content["text"])
-                    if "image" in content: parts.append(content["image"])
-                
-                history_for_ai.append({"role": role, "parts": parts})
-
-            # --- チャット開始 ---
-            # 過去の履歴を持った状態でチャットセッションを作る
-            chat = model.start_chat(history=history_for_ai)
+            # チャットセッションを開始
+            chat = model.start_chat(history=chat_history_for_ai)
+            response = chat.send_message(prompt, stream=True)
             
-            # 今回のユーザー入力データを作成
-            current_msg = st.session_state.messages[-1]["content"]
-            current_parts = []
-            if isinstance(current_msg, str):
-                current_parts.append(current_msg)
-            elif isinstance(current_msg, dict):
-                if "text" in current_msg: current_parts.append(current_msg["text"])
-                if "image" in current_msg: current_parts.append(current_msg["image"])
-
-            # 送信
-            response = chat.send_message(current_parts, stream=True)
-            
-            # ストリーミング表示
             for chunk in response:
                 if chunk.text:
                     full_response += chunk.text
                     response_placeholder.markdown(full_response)
             
-            # 回答を履歴に保存
             st.session_state.messages.append({"role": "model", "content": full_response})
-            
-            # 完了したらリロード（連投防止）
-            st.rerun()
 
         except Exception as e:
-            # エラー処理：特に「使いすぎ(429)」の場合のアドバイス
-            error_msg = str(e)
-            if "429" in error_msg:
-                st.error("⚠️ アクセス集中によりAIが混雑しています（429 Quota Exceeded）。")
-                st.info("Proモデルは高性能ですが利用制限が厳しいため、1分ほど待ってから再試行してください。")
-            else:
-                st.error(f"エラーが発生しました: {error_msg}")
-                st.info("会話が長くなりすぎている場合は「リセット」ボタンを試してください。")
-
-# --- 7. 入力エリア ---
-uploaded_file = st.file_uploader("📸 画像をアップロード（任意）", type=["jpg", "png", "jpeg"], key="file_uploader")
-
-if prompt := st.chat_input("質問を入力してください..."):
-    # 画像があるかどうかで保存形式を変える
-    if uploaded_file:
-        img = Image.open(uploaded_file)
-        st.session_state.messages.append({"role": "user", "content": {"text": prompt, "image": img}})
-    else:
-        st.session_state.messages.append({"role": "user", "content": prompt})
-    
-    st.rerun()
+            st.error(f"エラーが発生しました: {e}")
