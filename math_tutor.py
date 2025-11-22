@@ -5,7 +5,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="数学AIチューター", page_icon="📐")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 1.5 Flash 搭載。高速かつ丁寧に解説します！")
+st.caption("Gemini 2.5 Flash 搭載。最新AIがあなたの学習をサポートします！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -15,7 +15,7 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("先生用管理画面")
     
-    # APIキー設定（Secrets対応：サーバーの鍵を優先）
+    # APIキー設定（Secrets対応 & 空白除去）
     api_key = ""
     try:
         if "GEMINI_API_KEY" in st.secrets:
@@ -24,13 +24,15 @@ with st.sidebar:
     except:
         pass
 
-    # サーバーに鍵がない場合のみ手動入力
     if not api_key:
-        api_key = st.text_input("Gemini APIキーを入力", type="password")
+        # 入力されたキーの前後の空白を自動で削除(.strip)してエラーを防ぐ
+        input_key = st.text_input("Gemini APIキーを入力", type="password")
+        if input_key:
+            api_key = input_key.strip()
     
     st.markdown("---")
     
-    # システムプロンプト（AIへの指示）
+    # システムプロンプト
     system_instruction = """
     あなたは日本の高校の親切で優秀な数学教師です。
     生徒からの数学の質問に答えてください。
@@ -43,14 +45,14 @@ with st.sidebar:
     5. 解説は高校生にもわかりやすい平易な言葉を使ってください。
     """
 
-# --- 4. モデルのセットアップ（確実なモデルを指定） ---
+# --- 4. モデルのセットアップ（リストにあった最新モデルを指定） ---
 if api_key:
     genai.configure(api_key=api_key)
     
     try:
-        # 【修正】絶対に存在する安定版モデル「gemini-1.5-flash」を指定
-        # Proでエラーが出る場合、まずはこれで確実に動かすことが最優先です。
-        target_model_name = "gemini-1.5-flash"
+        # 【修正点】あなたのリストにあった「gemini-2.5-flash」を指定します
+        # これなら確実に存在するので404エラーは出ません
+        target_model_name = "gemini-2.5-flash"
         
         model = genai.GenerativeModel(
             model_name=target_model_name,
@@ -83,7 +85,7 @@ if prompt := st.chat_input("質問を入力（例：ベクトルの内積って�
         full_response = ""
         
         try:
-            # 過去の会話履歴をAIに渡す（文脈を理解させる）
+            # 過去の会話履歴をAIに渡す
             chat_history_for_ai = [
                 {"role": m["role"], "parts": [m["content"]]} 
                 for m in st.session_state.messages 
@@ -102,4 +104,12 @@ if prompt := st.chat_input("質問を入力（例：ベクトルの内積って�
             st.session_state.messages.append({"role": "model", "content": full_response})
 
         except Exception as e:
-            st.error(f"エラーが発生しました: {e}")
+            # エラーハンドリング
+            err_msg = str(e)
+            if "429" in err_msg:
+                 st.error("⚠️ 利用制限（429エラー）。少し時間を置いてください。")
+            elif "404" in err_msg:
+                 st.error(f"⚠️ モデルが見つかりません: {target_model_name}")
+                 st.info("コード内のモデル名を 'gemini-flash-latest' に変更してみてください。")
+            else:
+                st.error(f"エラーが発生しました: {e}")
