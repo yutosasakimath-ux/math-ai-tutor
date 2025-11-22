@@ -5,7 +5,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="数学AIチューター", page_icon="📐")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 1.5 Pro 搭載。ヒントを出して一緒に考えてくれるよ！")
+st.caption("Gemini 1.5 Flash 搭載。高速かつ丁寧に解説します！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -15,7 +15,7 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("先生用管理画面")
     
-    # APIキー設定（Secrets対応）
+    # APIキー設定（Secrets対応：サーバーの鍵を優先）
     api_key = ""
     try:
         if "GEMINI_API_KEY" in st.secrets:
@@ -24,11 +24,13 @@ with st.sidebar:
     except:
         pass
 
+    # サーバーに鍵がない場合のみ手動入力
     if not api_key:
         api_key = st.text_input("Gemini APIキーを入力", type="password")
     
     st.markdown("---")
     
+    # システムプロンプト（AIへの指示）
     system_instruction = """
     あなたは日本の高校の親切で優秀な数学教師です。
     生徒からの数学の質問に答えてください。
@@ -41,23 +43,19 @@ with st.sidebar:
     5. 解説は高校生にもわかりやすい平易な言葉を使ってください。
     """
 
-# --- 4. モデルのセットアップ（ここを修正！） ---
+# --- 4. モデルのセットアップ（確実なモデルを指定） ---
 if api_key:
     genai.configure(api_key=api_key)
     
     try:
-        # 【修正点】モデルを自動探索せず、名指しで指定します。
-        # これにより、勝手に実験版(2.5)が選ばれるエラーを防ぎます。
-        # "gemini-1.5-pro" は現在無料で使える中で最も賢いモデルです。
-        target_model_name = "gemini-1.5-pro"
+        # 【修正】絶対に存在する安定版モデル「gemini-1.5-flash」を指定
+        # Proでエラーが出る場合、まずはこれで確実に動かすことが最優先です。
+        target_model_name = "gemini-1.5-flash"
         
         model = genai.GenerativeModel(
             model_name=target_model_name,
             system_instruction=system_instruction
         )
-        
-        # デバッグ用表示（必要なければ消してもOK）
-        # st.sidebar.caption(f"使用モデル: {target_model_name}")
 
     except Exception as e:
         st.error(f"モデル設定エラー: {e}")
@@ -85,7 +83,7 @@ if prompt := st.chat_input("質問を入力（例：ベクトルの内積って�
         full_response = ""
         
         try:
-            # 履歴の変換処理
+            # 過去の会話履歴をAIに渡す（文脈を理解させる）
             chat_history_for_ai = [
                 {"role": m["role"], "parts": [m["content"]]} 
                 for m in st.session_state.messages 
@@ -104,9 +102,4 @@ if prompt := st.chat_input("質問を入力（例：ベクトルの内積って�
             st.session_state.messages.append({"role": "model", "content": full_response})
 
         except Exception as e:
-            # エラー処理
-            err_msg = str(e)
-            if "429" in err_msg:
-                st.error("⚠️ 使いすぎです（429エラー）。少し時間を置いてから試してください。")
-            else:
-                st.error(f"エラーが発生しました: {e}")
+            st.error(f"エラーが発生しました: {e}")
