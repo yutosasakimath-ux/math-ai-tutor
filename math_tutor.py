@@ -15,7 +15,7 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.header("先生用管理画面")
     
-    # APIキー設定（Secrets対応 & 空白除去）
+    # APIキー設定
     api_key = ""
     try:
         if "GEMINI_API_KEY" in st.secrets:
@@ -25,10 +25,17 @@ with st.sidebar:
         pass
 
     if not api_key:
-        # 入力されたキーの前後の空白を自動で削除(.strip)してエラーを防ぐ
         input_key = st.text_input("Gemini APIキーを入力", type="password")
         if input_key:
             api_key = input_key.strip()
+    
+    st.markdown("---")
+
+    # ★追加機能：会話リセットボタン★
+    # type="primary" にすると赤いボタン（目立つボタン）になります
+    if st.button("🗑️ 会話をリセットする", type="primary"):
+        st.session_state.messages = []  # 履歴を空にする
+        st.rerun()  # 画面を再読み込みしてリセットを反映
     
     st.markdown("---")
     
@@ -45,19 +52,23 @@ with st.sidebar:
     5. 解説は高校生にもわかりやすい平易な言葉を使ってください。
     """
 
-# --- 4. モデルのセットアップ（リストにあった最新モデルを指定） ---
+# --- 4. モデルのセットアップ ---
 if api_key:
     genai.configure(api_key=api_key)
     
     try:
-        # 【修正点】あなたのリストにあった「gemini-2.5-flash」を指定します
-        # これなら確実に存在するので404エラーは出ません
+        # 最新モデル指定
         target_model_name = "gemini-2.5-flash"
         
         model = genai.GenerativeModel(
             model_name=target_model_name,
             system_instruction=system_instruction
         )
+
+        # 開発者用モデル表示
+        st.sidebar.divider()
+        st.sidebar.caption("🛠️ Developer Info")
+        st.sidebar.info(f"🤖 Active Model:\n`{target_model_name}`")
 
     except Exception as e:
         st.error(f"モデル設定エラー: {e}")
@@ -104,12 +115,10 @@ if prompt := st.chat_input("質問を入力（例：ベクトルの内積って�
             st.session_state.messages.append({"role": "model", "content": full_response})
 
         except Exception as e:
-            # エラーハンドリング
             err_msg = str(e)
             if "429" in err_msg:
                  st.error("⚠️ 利用制限（429エラー）。少し時間を置いてください。")
             elif "404" in err_msg:
                  st.error(f"⚠️ モデルが見つかりません: {target_model_name}")
-                 st.info("コード内のモデル名を 'gemini-flash-latest' に変更してみてください。")
             else:
                 st.error(f"エラーが発生しました: {e}")
