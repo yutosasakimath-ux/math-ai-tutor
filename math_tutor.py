@@ -12,33 +12,30 @@ st.caption("わからない問題を質問してみよう。サイドバーの�
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- 3. サイドバー設定（機能追加） ---
+# --- 3. サイドバー設定 ---
 with st.sidebar:
     st.header("🛠️ 先生用・ツール")
     
-    # APIキー設定（エラー回避ロジック付き）
+    # APIキー設定
     api_key = ""
     try:
-        # サーバーに鍵があるか確認
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
             st.success("✅ 認証済み（サーバーキー）")
     except:
-        # ローカルなどでsecretsファイルがない場合は無視
         pass
 
-    # 鍵が見つからなかった場合だけ手動入力を表示
     if not api_key:
         api_key = st.text_input("Gemini APIキーを入力", type="password")
 
     st.markdown("---")
 
-    # ★追加機能1：会話リセットボタン
+    # 会話リセットボタン
     if st.button("🗑️ 会話をリセットする", type="primary"):
         st.session_state.messages = [] 
         st.rerun() 
 
-    # ★追加機能2：類題生成ボタン
+    # 類題生成ボタン
     if st.button("🔄 さっきの類題を出題"):
         st.session_state.messages.append({
             "role": "user", 
@@ -49,13 +46,11 @@ with st.sidebar:
     st.markdown("---")
     
     # ログダウンロード
-    st.write("### 📥 学習ログ保存")
     log_text = ""
     for m in st.session_state.messages:
         role_name = "自分" if m["role"] == "user" else "AI先生"
         content_text = m["content"] if isinstance(m["content"], str) else "[画像]"
         log_text += f"【{role_name}】\n{content_text}\n\n"
-        
     st.download_button("ログをダウンロード (.txt)", log_text, "math_log.txt")
 
     # システムプロンプト
@@ -75,23 +70,19 @@ with st.sidebar:
             """
         )
 
-# --- 4. モデル設定 ---
+# --- 4. モデル設定（修正済み） ---
 model = None
 if api_key:
     genai.configure(api_key=api_key)
     try:
-        # モデル選択ロジック
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        target_model = "gemini-1.5-flash" 
-        
-        for m in available_models:
-            if "flash" in m or "pro" in m:
-                target_model = m
-                break
-                
-        model = genai.GenerativeModel(target_model, system_instruction=system_instruction)
-    except Exception:
-        pass 
+        # 【修正】実験的なモデルを避け、安定版の「1.5 Flash」を指名する
+        # Flashは高速で、無料枠の制限も緩いため教育アプリに最適です
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash", 
+            system_instruction=system_instruction
+        )
+    except Exception as e:
+        st.error(f"モデル設定エラー: {e}")
 
 # --- 5. チャット履歴の表示 ---
 for message in st.session_state.messages:
@@ -118,17 +109,24 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             last_msg = st.session_state.messages[-1]["content"]
             content_to_send = [last_msg["text"], last_msg["image"]] if isinstance(last_msg, dict) else last_msg
 
-            response = model.generate_content(content_to_send, stream=True)
-            for chunk in response:
-                if chunk.text:
-                    full_response += chunk.text
-                    response_placeholder.markdown(full_response)
+            # エラーハンドリングを追加
+            try:
+                response = model.generate_content(content_to_send, stream=True)
+                for chunk in response:
+                    if chunk.text:
+                        full_response += chunk.text
+                        response_placeholder.markdown(full_response)
+                
+                st.session_state.messages.append({"role": "model", "content": full_response})
+                st.rerun()
             
-            st.session_state.messages.append({"role": "model", "content": full_response})
-            st.rerun()
+            except Exception as api_error:
+                # APIエラー（429など）が出た場合に画面に優しく表示する
+                st.error(f"通信エラーが発生しました: {api_error}")
+                st.info("時間を置いてもう一度試すか、会話をリセットしてみてください。")
 
         except Exception as e:
-            st.error(f"エラー: {e}")
+            st.error(f"予期せぬエラー: {e}")
 
 # --- 7. 入力エリア ---
 uploaded_file = st.file_uploader("📸 画像をアップロード（任意）", type=["jpg", "png", "jpeg"], key="img_uploader")
