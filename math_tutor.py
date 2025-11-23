@@ -1,20 +1,31 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
+from streamlit_drawable_canvas import st_canvas
+
+# --- 0. 状態リセット処理（ここが最重要！）---
+# 画面が描画される前に、入力モードのリセット予約があるかチェックします
+if "force_reset_to_text" in st.session_state and st.session_state["force_reset_to_text"]:
+    st.session_state["input_method_radio"] = "Text"  # 強制的にテキストモードに戻す
+    st.session_state["force_reset_to_text"] = False # 予約を解除
 
 # --- 1. アプリの初期設定 ---
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。直感的な操作で演習を進めよう！")
+st.caption("Gemini 2.5 Flash 搭載。送信すると自動でテキスト入力に戻ります！")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 画像アップローダーのリセット用キー
+# 各種リセット用キー
 if "uploader_key" not in st.session_state:
     st.session_state["uploader_key"] = 0
+if "canvas_key" not in st.session_state:
+    st.session_state["canvas_key"] = 0
+if "form_key_index" not in st.session_state:
+    st.session_state["form_key_index"] = 0
 
 # --- 3. サイドバー（設定＆モード選択） ---
 with st.sidebar:
@@ -48,10 +59,10 @@ with st.sidebar:
         st.info("💡 ヒントを出しながら、あなたの理解を助けます。")
         
         st.write("### 🔄 類題演習")
-        # 学習モード用の問題数
+        
+        # 数値入力ボックス
         num_questions_learn = st.number_input("類題の数", 1, 5, 1, key="num_learn")
         
-        # 難易度調整ボタン
         st.caption("難易度を選んで出題")
         l_col1, l_col2, l_col3 = st.columns(3)
         
@@ -110,26 +121,45 @@ with st.sidebar:
     elif mode == "⚡ 解答確認モード":
         st.warning("📸 解答が知りたい問題を入力（または画像をアップ）してください。即座に答えを提示します。")
     
-    # --- ■ 3. 演習モード（ここを修正！） ---
+    # --- ■ 3. 演習モード ---
     elif mode == "⚔️ 演習モード":
         st.success("📝 問題を出題し、採点します。")
         
+        st.write("### 🔢 設定")
+        num_q_init = st.number_input("初回の出題数", 1, 5, 1, key="q_init")
+        
         st.write("### 🆕 演習スタート")
-        topic = st.text_input("演習したい単元（例：二次関数）")
         
-        # ★修正点：開始ボタンの直上に、このボタン専用の数字入力欄を配置
-        num_q_init = st.number_input("出題する問題数", 1, 5, 1, key="q_init")
+        math_curriculum = {
+            "数学I": ["数と式", "集合と命題", "二次関数", "図形と計量", "データの分析"],
+            "数学A": ["場合の数と確率", "図形の性質", "整数の性質"],
+            "数学II": ["式と証明", "複素数と方程式", "図形と方程式", "三角関数", "指数・対数関数", "微分・積分"],
+            "数学B": ["数列", "統計的な推測"],
+            "数学III": ["極限", "微分法", "積分法"],
+            "数学C": ["ベクトル", "平面上の曲線と複素数平面"],
+            "手動入力": [] 
+        }
         
+        selected_subject = st.selectbox("科目を選択", list(math_curriculum.keys()))
+        topic_for_prompt = ""
+        
+        if selected_subject == "手動入力":
+            topic_for_prompt = st.text_input("単元名を入力（例：合同式）")
+        else:
+            selected_topic = st.selectbox("単元を選択", math_curriculum[selected_subject])
+            topic_for_prompt = f"{selected_subject}の{selected_topic}"
+
         if st.button("問題を作成開始"):
-            prompt_text = f"【{topic}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
-            st.session_state.messages.append({"role": "user", "content": prompt_text})
-            st.rerun()
+            if not topic_for_prompt:
+                st.error("単元を選択してください。")
+            else:
+                prompt_text = f"【{topic_for_prompt}】に関する練習問題を【{num_q_init}問】出題してください。問1, 問2...と番号を振ってください。まだ答えは言わないでください。"
+                st.session_state.messages.append({"role": "user", "content": prompt_text})
+                st.rerun()
         
         st.markdown("---")
         
         st.write("### ⏩ 次の問題へ")
-        
-        # ★修正点：次へボタンの直上に、このボタン専用の数字入力欄を配置
         num_q_next = st.number_input("次に出す問題数", 1, 5, 1, key="q_next")
         
         st.caption("難易度を選んで次のセットへ")
@@ -190,7 +220,7 @@ with st.sidebar:
 
 base_instruction = """
 あなたは日本の高校数学教師です。数式は必ずLaTeX形式（$マーク）で書いてください。
-画像が送られた場合、その画像に書かれている数式や図形を読み取り、質問に答えてください。
+画像や手書き入力が送られた場合、それを読み取り、数学的に解釈して応答してください。
 """
 
 if mode == "📖 学習モード":
@@ -289,40 +319,98 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# --- 8. 入力エリア（画像リセット機能付き） ---
+# --- 8. 入力エリア ---
 if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "user"):
     
-    uploader_key = f"file_uploader_{st.session_state['uploader_key']}"
+    # キーを動的に変えて中身をリセットするための変数
+    current_key = st.session_state["form_key_index"]
+    uploader_key = f"uploader_{current_key}"
+    canvas_key = f"canvas_{current_key}"
 
-    with st.expander("📸 画像をアップロード", expanded=False):
-        uploaded_file = st.file_uploader("問題の写真をアップロード", type=["jpg", "png", "jpeg"], key=uploader_key)
+    st.write("### 📝 入力方法を選択")
+    
+    input_method = st.radio(
+        "入力方法",
+        ["Text", "Image", "Handwriting"],
+        format_func=lambda x: "⌨️ テキスト" if x == "Text" else ("📸 画像" if x == "Image" else "✍️ 手書き"),
+        horizontal=True,
+        label_visibility="collapsed",
+        key="input_method_radio"
+    )
 
-    placeholder_text = "質問を入力..."
-    if mode == "⚡ 解答確認モード":
-        placeholder_text = "解答を知りたい問題を入力（または画像を送信）"
-    elif mode == "⚔️ 演習モード":
-        placeholder_text = "解答を入力（例：(1) 5, (2) 10 ...）"
-
-    if prompt := st.chat_input(placeholder_text):
-        content_to_save = {}
-        text_part = prompt
-        
-        if mode == "⚔️ 演習モード":
-            text_part = f"【生徒の解答】\n{prompt}\n\n※採点してください。正解なら解説のみを行ってください。"
-        
-        content_to_save["text"] = text_part
-
-        if uploaded_file:
-            image_data = Image.open(uploaded_file)
-            content_to_save["image"] = image_data
-            if not prompt:
-                content_to_save["text"] = "この画像の数学の問題を解いてください。"
-        
-        if content_to_save.get("text") or content_to_save.get("image"):
-            if "image" in content_to_save:
-                st.session_state.messages.append({"role": "user", "content": content_to_save})
-            else:
-                st.session_state.messages.append({"role": "user", "content": text_part})
+    # --- A. テキスト入力モード ---
+    if input_method == "Text":
+        with st.form(key=f'text_form_{current_key}'):
+            user_text = st.text_area("メッセージを入力", height=70, placeholder="質問や回答を入力してください")
+            col1, col2 = st.columns([1, 6])
+            with col1:
+                submit_text = st.form_submit_button("送信", type="primary")
             
-            st.session_state["uploader_key"] += 1
-            st.rerun()
+            if submit_text and user_text:
+                content = user_text
+                if mode == "⚔️ 演習モード":
+                    content = f"【生徒の解答】\n{user_text}\n\n※採点してください。正解なら解説のみを行ってください。"
+                st.session_state.messages.append({"role": "user", "content": content})
+                
+                # ★修正：状態リセットを予約する（ここではまだ書き換えない）
+                st.session_state["form_key_index"] += 1
+                st.rerun()
+
+    # --- B. 画像アップロードモード ---
+    elif input_method == "Image":
+        st.info("👇 下のボタンから画像をアップロードしてください")
+        img_file = st.file_uploader("画像を選択", type=["jpg", "png", "jpeg"], key=uploader_key)
+        img_text = st.text_input("補足コメント（任意）", key=f"img_comment_{current_key}")
+        
+        if st.button("画像で送信", type="primary"):
+            if img_file:
+                image_data = Image.open(img_file)
+                text_part = img_text if img_text else "この画像の数学の問題を解いてください。"
+                if mode == "⚔️ 演習モード":
+                    text_part = f"【生徒の画像解答】\n{text_part}\n\n※採点してください。"
+                
+                content_to_save = {"image": image_data, "text": text_part}
+                st.session_state.messages.append({"role": "user", "content": content_to_save})
+                
+                # ★修正：状態リセットを予約して、テキストモードへの強制リセットも予約
+                st.session_state["form_key_index"] += 1
+                st.session_state["force_reset_to_text"] = True
+                st.rerun()
+            else:
+                st.warning("画像を選択してください。")
+
+    # --- C. 手書き入力モード ---
+    elif input_method == "Handwriting":
+        st.write("👇 ここに指やマウスで数式を書いてください")
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 165, 0, 0.3)",
+            stroke_width=3,
+            stroke_color="#000000",
+            background_color="#ffffff",
+            height=300,
+            width=500,
+            drawing_mode="freedraw",
+            key=canvas_key,
+            display_toolbar=True
+        )
+        
+        if st.button("手書きを送信", type="primary"):
+            if canvas_result.image_data is not None:
+                img_data = canvas_result.image_data.astype('uint8')
+                pil_image = Image.fromarray(img_data, "RGBA")
+                background = Image.new("RGB", pil_image.size, (255, 255, 255))
+                background.paste(pil_image, mask=pil_image.split()[3])
+                
+                content_to_save = {
+                    "image": background,
+                    "text": "【生徒の手書き入力】\nこの手書きの数式・図形を読み取って回答してください。"
+                }
+                if mode == "⚔️ 演習モード":
+                    content_to_save["text"] = "【生徒の手書き解答】\nこの手書きを解答として採点してください。"
+
+                st.session_state.messages.append({"role": "user", "content": content_to_save})
+                
+                # ★修正：状態リセットを予約して、テキストモードへの強制リセットも予約
+                st.session_state["form_key_index"] += 1
+                st.session_state["force_reset_to_text"] = True
+                st.rerun()
