@@ -13,7 +13,7 @@ if "force_reset_to_text" in st.session_state and st.session_state["force_reset_t
 st.set_page_config(page_title="数学AIチューター", page_icon="📐", layout="wide")
 
 st.title("📐 高校数学 AIチューター")
-st.caption("Gemini 2.5 Flash 搭載。送信すると自動でテキスト入力に戻ります！")
+st.caption("Gemini 2.5 Flash 搭載。")
 
 # --- 2. 会話履歴の保存場所 ---
 if "messages" not in st.session_state:
@@ -414,3 +414,4 @@ if not (st.session_state.messages and st.session_state.messages[-1]["role"] == "
                 st.session_state["form_key_index"] += 1
                 st.session_state["force_reset_to_text"] = True
                 st.rerun()
+
